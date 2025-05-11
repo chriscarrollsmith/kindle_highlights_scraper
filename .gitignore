@@ -1,0 +1,10 @@
+# SpecStory explanation file
+.specstory/.what-is-this.md
+.specstory/*
+plan.md
+rendered_html.md
+.venv/
+kindle_highlights.sqlite
+kindle_highlights.parquet
+.cursorindexingignore
+auth_state.json
