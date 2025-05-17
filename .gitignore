@@ -8,3 +8,4 @@ kindle_highlights.sqlite
 kindle_highlights.parquet
 .cursorindexingignore
 auth_state.json
+artifacts/

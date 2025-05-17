@@ -9,17 +9,18 @@ import os # For checking file existence
 import json # For parsing auth_state.json
 
 # Constants
+TEST_MODE = True  # Set to True to only process the first book, False to process all books
 KINDLE_NOTEBOOK_URL = "https://read.amazon.com/notebook"
 # Placeholder selectors - REPLACE THESE WITH YOUR FINDINGS from rendered_html.md or manual inspection
 BOOK_LIST_SELECTOR = "div.kp-notebook-library-each-book" # Example, adjust
 BOOK_TITLE_IN_LIST_SELECTOR = "h2.kp-notebook-searchable" # Example, adjust
+BOOK_AUTHOR_IN_LIST_SELECTOR = "p.a-spacing-base.a-spacing-top-mini.a-text-center.a-size-base.a-color-secondary.kp-notebook-searchable" # For author in list view
+BOOK_AUTHOR_IN_DETAIL_SELECTOR = "p.a-spacing-none.a-spacing-top-micro.a-size-base.a-color-secondary.kp-notebook-selectable.kp-notebook-metadata" # For author in detail view
 BOOK_ASIN_ATTRIBUTE = "id" # If the book div id is the ASIN like B0... # Or 'data-asin'
 HIGHLIGHT_SELECTOR = "div[id^='highlight-']" # More robust: "div[id^=highlight-]"
 NOTE_SELECTOR = "div[id^='note-']" # More robust: "div[id^=note-]"
-HIGHLIGHT_TEXT_SELECTOR = "#highlight" # within highlight div, from plan.md
-NOTE_TEXT_SELECTOR = "#note" # within note div, from plan.md
-# The plan uses "span:has-text('Some highlights have been hidden')"
-# Let's try to be more specific if possible, but start with the plan's suggestion.
+HIGHLIGHT_TEXT_SELECTOR = "#highlight" # within highlight div
+NOTE_TEXT_SELECTOR = "#note" # within note div
 EXPORT_LIMIT_NOTICE_SELECTOR = "div.a-alert-content:has-text('Some highlights have been hidden or truncated due to export limits.')"
 
 DB_NAME = "kindle_highlights.sqlite"
@@ -48,6 +49,7 @@ def setup_database():
     CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         book_title TEXT,
+        book_author TEXT,
         book_asin TEXT,
         item_type TEXT, -- 'highlight' or 'note'
         content TEXT,
@@ -96,6 +98,7 @@ async def scrape_kindle_highlights():
     setup_database()
     limited_export_books = []
     all_collected_data = [] # To store data before batch writing to DB or Parquet
+    processed_note_ids = set() # Track which notes have been processed with highlights
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True) # Can be headless now
@@ -136,6 +139,7 @@ async def scrape_kindle_highlights():
             book_element = current_book_elements[i]
             
             book_title = "Unknown Title"
+            book_author = "Unknown Author"
             book_asin = "UnknownASIN"
 
             try:
@@ -144,6 +148,14 @@ async def scrape_kindle_highlights():
                     book_title = (await title_locator.first.text_content() or "").strip()
                 else:
                     book_title = "Unknown Title" # Default if not found
+                
+                author_locator = book_element.locator(BOOK_AUTHOR_IN_LIST_SELECTOR)
+                if await author_locator.count() > 0:
+                    author_text = (await author_locator.first.text_content() or "").strip()
+                    # Clean up the author text by removing "By: " prefix if present
+                    book_author = author_text.replace("By:", "").strip() if "By:" in author_text else author_text
+                else:
+                    book_author = "Unknown Author" # Default if not found
                 
                 raw_book_id = await book_element.get_attribute(BOOK_ASIN_ATTRIBUTE)
                 # Try to extract ASIN from common patterns in id or data-asin
@@ -154,7 +166,7 @@ async def scrape_kindle_highlights():
                     else:
                         book_asin = f"custom_id_{raw_book_id}" # Fallback
                 
-                print(f"\nProcessing book ({i+1}/{len(book_elements)}): {book_title} (ASIN/ID: {book_asin})")
+                print(f"\nProcessing book ({i+1}/{len(book_elements)}): {book_title} (Author: {book_author}) (ASIN/ID: {book_asin})")
 
                 await book_element.click()
                 
@@ -164,10 +176,20 @@ async def scrape_kindle_highlights():
                     # Let's use a more general approach: wait for any highlight or note to appear.
                     await page.wait_for_selector(f'{HIGHLIGHT_SELECTOR}, {NOTE_SELECTOR}', timeout=20000)
                     print("Highlights/notes section loaded.")
+                    
+                    # Try to get author from detail view if we don't have good author info yet
+                    if book_author == "Unknown Author" or not book_author:
+                        # Wait a bit for the detail view to fully load
+                        await page.wait_for_timeout(1000)
+                        # Try to find author in the detail view
+                        detail_author_locator = page.locator(BOOK_AUTHOR_IN_DETAIL_SELECTOR)
+                        if await detail_author_locator.count() > 0:
+                            book_author = (await detail_author_locator.first.text_content() or "").strip()
+                            print(f"Updated author from detail view: {book_author}")
                 except PlaywrightTimeoutError:
                     print(f"Timeout waiting for highlights/notes to load for {book_title}. Skipping this book's highlights.")
                     # If book list isn't stable, might need to page.go_back() and re-wait for BOOK_LIST_SELECTOR
-                    continue 
+                    continue
                 
                 await page.wait_for_timeout(2000) # Extra buffer
 
@@ -176,7 +198,11 @@ async def scrape_kindle_highlights():
                     if book_title not in limited_export_books:
                         limited_export_books.append(book_title)
                 
+                # Process highlights first, checking for associated notes
                 highlight_divs = await page.locator(HIGHLIGHT_SELECTOR).all()
+                highlight_count = 0
+                highlight_with_note_count = 0
+                
                 for hl_div in highlight_divs:
                     original_id = await hl_div.get_attribute("id")
                     text_locator = hl_div.locator(HIGHLIGHT_TEXT_SELECTOR)
@@ -185,32 +211,67 @@ async def scrape_kindle_highlights():
                         text_content = (await text_locator.first.text_content() or "").strip()
                     
                     if text_content and original_id:
+                        # Quote the highlight
+                        quoted_highlight = f'"{text_content}"'
+                        final_content = quoted_highlight
+                        
+                        # Check for associated note that appears near this highlight
+                        associated_note_locator = page.locator(f'{NOTE_SELECTOR}:near(#{original_id})')
+                        has_associated_note = await associated_note_locator.count() > 0
+                        
+                        if has_associated_note:
+                            associated_note = associated_note_locator.first
+                            note_id = await associated_note.get_attribute("id")
+                            note_text_locator = associated_note.locator(NOTE_TEXT_SELECTOR)
+                            
+                            if await note_text_locator.count() > 0:
+                                note_text = (await note_text_locator.first.text_content() or "").strip()
+                                if note_text:
+                                    # Append note to the quoted highlight with a space
+                                    final_content = f"{quoted_highlight} {note_text}"
+                                    processed_note_ids.add(note_id)
+                                    highlight_with_note_count += 1
+                        
                         all_collected_data.append({
                             "book_title": book_title,
+                            "book_author": book_author,
                             "book_asin": book_asin,
                             "item_type": "highlight",
-                            "content": text_content,
+                            "content": final_content,
                             "original_id": original_id
                         })
-                print(f"Found {len(highlight_divs)} highlights for {book_title}.")
+                        highlight_count += 1
+                
+                print(f"Found {highlight_count} highlights for {book_title}, of which {highlight_with_note_count} have associated notes.")
 
+                # Process orphaned notes (notes without highlights)
                 note_divs = await page.locator(NOTE_SELECTOR).all()
+                orphan_note_count = 0
+                
                 for nt_div in note_divs:
                     original_id = await nt_div.get_attribute("id")
+                    
+                    # Skip notes that were already processed with highlights
+                    if original_id in processed_note_ids:
+                        continue
+                    
                     text_locator = nt_div.locator(NOTE_TEXT_SELECTOR)
                     text_content = ""
                     if await text_locator.count() > 0:
                         text_content = (await text_locator.first.text_content() or "").strip()
                     
                     if text_content and original_id:
-                         all_collected_data.append({
+                        all_collected_data.append({
                             "book_title": book_title,
+                            "book_author": book_author,
                             "book_asin": book_asin,
                             "item_type": "note",
                             "content": text_content,
                             "original_id": original_id
                         })
-                print(f"Found {len(note_divs)} notes for {book_title}.")
+                        orphan_note_count += 1
+                
+                print(f"Found {orphan_note_count} orphaned notes for {book_title}.")
 
             except PlaywrightTimeoutError as e:
                 print(f"Timeout error processing book {book_title}: {e}")
@@ -218,6 +279,11 @@ async def scrape_kindle_highlights():
                 print(f"An error occurred processing book {book_title}: {e}")
             
             await page.wait_for_timeout(1000 + random.randint(0,1000)) # Random delay
+            
+            # If in test mode, break after processing the first book
+            if TEST_MODE and i == 0:
+                print("TEST MODE: Only processing the first book. Set TEST_MODE = False to process all books.")
+                break
 
     if all_collected_data:
         df = pd.DataFrame(all_collected_data)

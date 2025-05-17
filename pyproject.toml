@@ -4,4 +4,6 @@ version = "0.1.0"
 description = "Use Python Playwright to get your highlights and notes from the Amazon Kindle notebook and save them to SQLite"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "pyzotero>=1.6.11",
+]
