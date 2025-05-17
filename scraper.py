@@ -1,6 +1,5 @@
 import asyncio
 import sqlite3
-import pandas as pd
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import time
 import re # For extracting ASINs if needed
@@ -25,6 +24,58 @@ EXPORT_LIMIT_NOTICE_SELECTOR = "div.a-alert-content:has-text('Some highlights ha
 
 DB_NAME = "kindle_highlights.sqlite"
 TABLE_NAME = "highlights_notes"
+
+def convert_quotes(text):
+    """
+    Convert quotes intelligently:
+    1. Double curly quotes (""): converted to single straight quotes (')
+    2. Single curly quotes:
+       - Left single curly quote ('): always converted to double straight quote (")
+       - Right single curly quote ('): 
+          * If likely an apostrophe: kept as single straight quote (')
+          * If likely a quote mark: converted to double straight quote (")
+    
+    Uses context-based heuristics for differentiating apostrophes from quotation marks.
+    """
+    # First, handle double curly quotes - using explicit Unicode escape sequences
+    # U+201C = left double curly quote, U+201D = right double curly quote
+    text = text.replace("\u201c", "'").replace("\u201d", "'")
+    
+    # Create a function to determine if a character is alphanumeric
+    def is_alphanum(char):
+        return char.isalnum() if char else False
+
+    # Process single curly quotes with context awareness
+    # U+2018 = left single curly quote, U+2019 = right single curly quote
+    result = []
+    i = 0
+    while i < len(text):
+        # Check for left single curly quote - always a quotation mark
+        if i < len(text) and text[i] == "\u2018":
+            result.append('"')  # Convert to double straight quote
+        
+        # Check for right single curly quote - could be apostrophe or quote
+        elif i < len(text) and text[i] == "\u2019":
+            # Get context (character before and after)
+            prev_char = text[i-1] if i > 0 else ' '
+            next_char = text[i+1] if i+1 < len(text) else ' '
+            
+            # Definite apostrophe cases:
+            # 1. Inside a word (like don't, can't) - when both sides are letters
+            # 2. After 's' at the end of a word - plural possessive
+            if (prev_char.isalpha() and next_char.isalpha()) or \
+               (prev_char.lower() == "s" and not is_alphanum(next_char)):
+                result.append("'")  # Keep as straight single quote for apostrophes
+            # Likely quote mark cases:
+            # 1. Quote preceded by a letter and followed by space/punctuation (closing quote)
+            # 2. Quote surrounded by spaces/punctuation (isolated quote)
+            else:
+                result.append('"')  # Convert to double straight quote for quotations
+        else:
+            result.append(text[i])
+        i += 1
+    
+    return "".join(result)
 
 async def save_auth_state(page, path="auth_state.json"):
     await page.context.storage_state(path=path)
@@ -97,7 +148,7 @@ def is_auth_state_valid(auth_file_path: str) -> bool:
 async def scrape_kindle_highlights():
     setup_database()
     limited_export_books = []
-    all_collected_data = [] # To store data before batch writing to DB or Parquet
+    all_collected_data = [] # To store data before batch writing to DB
     processed_note_ids = set() # Track which notes have been processed with highlights
 
     async with async_playwright() as p:
@@ -211,7 +262,8 @@ async def scrape_kindle_highlights():
                         text_content = (await text_locator.first.text_content() or "").strip()
                     
                     if text_content and original_id:
-                        # Quote the highlight
+                        # Convert curly quotes and then quote the highlight
+                        text_content = convert_quotes(text_content)
                         quoted_highlight = f'"{text_content}"'
                         final_content = quoted_highlight
                         
@@ -227,6 +279,8 @@ async def scrape_kindle_highlights():
                             if await note_text_locator.count() > 0:
                                 note_text = (await note_text_locator.first.text_content() or "").strip()
                                 if note_text:
+                                    # Also convert curly quotes in the note text
+                                    note_text = convert_quotes(note_text)
                                     # Append note to the quoted highlight with a space
                                     final_content = f"{quoted_highlight} {note_text}"
                                     processed_note_ids.add(note_id)
@@ -261,6 +315,8 @@ async def scrape_kindle_highlights():
                         text_content = (await text_locator.first.text_content() or "").strip()
                     
                     if text_content and original_id:
+                        # Convert curly quotes in orphaned notes
+                        text_content = convert_quotes(text_content)
                         all_collected_data.append({
                             "book_title": book_title,
                             "book_author": book_author,
@@ -286,13 +342,11 @@ async def scrape_kindle_highlights():
                 break
 
     if all_collected_data:
-        df = pd.DataFrame(all_collected_data)
-        
         conn = sqlite3.connect(DB_NAME)
         try:
             # Using INSERT OR IGNORE for robustness with UNIQUE constraint
             cursor = conn.cursor()
-            for row in df.to_dict('records'):
+            for row in all_collected_data:
                 cols = ', '.join([f'"{col}"' for col in row.keys()]) # Quote column names
                 placeholders = ', '.join('?' * len(row))
                 sql = f"INSERT OR IGNORE INTO \"{TABLE_NAME}\" ({cols}) VALUES ({placeholders})"
@@ -301,20 +355,13 @@ async def scrape_kindle_highlights():
                 except sqlite3.InterfaceError as ie:
                     print(f"SQLite InterfaceError for row {row}: {ie}. SQL: {sql}") # Debug specific row error
             conn.commit()
-            print(f"\nSuccessfully saved/updated {len(df)} items to SQLite database: {DB_NAME}")
+            print(f"\nSuccessfully saved/updated {len(all_collected_data)} items to SQLite database: {DB_NAME}")
         except sqlite3.IntegrityError as e:
              print(f"SQLite Integrity Error (likely duplicate original_id): {e}. Some rows might not have been inserted.")
         except Exception as e:
             print(f"Error saving to SQLite: {e}")
         finally:
             conn.close()
-
-        try:
-            parquet_file = "kindle_highlights.parquet"
-            df.to_parquet(parquet_file, index=False)
-            print(f"Successfully saved data to Parquet file: {parquet_file}")
-        except Exception as e:
-            print(f"Error saving to Parquet: {e}")
 
     print("\n--- Summary ---")
     print(f"Total items collected: {len(all_collected_data)}")
