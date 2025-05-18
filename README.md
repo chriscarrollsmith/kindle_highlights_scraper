@@ -2,53 +2,43 @@
 
 ## Description
 
-This Python script scrapes your Kindle highlights and notes from the Amazon Kindle Notebook webpage (`https://read.amazon.com/notebook`). It uses Playwright to automate browser interaction, extracts your annotations, and saves them locally into an SQLite database and a Parquet file.
+This repository contains a Python script (`scraper.py`) that scrapes your Kindle highlights and notes from the Amazon Kindle Notebook webpage (`https://read.amazon.com/notebook`). It uses Playwright to automate browser interaction, extracts your annotations, and saves them locally into an SQLite database. The script is designed to handle initial login by saving authentication state, and then use this saved state for subsequent headless scraping runs.
 
-The script is designed to handle initial login by saving authentication state, and then use this saved state for subsequent headless scraping runs.
+The repository also contains a separate script (`pyzotero-etl.py`) that imports the highlights and notes into Zotero.
 
 ## Features
 
 *   Automated scraping of Kindle highlights and notes.
 *   Persistent login using Playwright's authentication state saving.
 *   Saves data to an SQLite database for easy querying.
-*   Saves data to a Parquet file for use with data analysis tools.
 *   Detects and reports books that may have export limits imposed by Amazon.
-*   Attempts to extract book ASINs.
-*   Basic error handling and timeout management.
+*   Automated import into Zotero.
 
 ## Prerequisites
 
-*   Python 3.8+
+*   Python 3.13
 *   `uv` (Python packaging tool, can be installed via `pip install uv`)
 
 ## Setup and Installation
 
 1.  **Clone the repository (or download the files):**
     ```bash
-    # If this were a git repo:
-    # git clone <repository-url>
-    # cd kindle-highlights-scraper
+    git clone https://github.com/chriscarrollsmith/kindle_highlights_scraper
+    cd kindle_highlights_scraper
     ```
-    For now, ensure you have `scraper.py` in your project directory.
 
 2.  **Create a virtual environment and install dependencies:**
     This project uses `uv` for environment and package management.
     ```bash
-    # Create and activate a virtual environment
-    uv venv
-    source .venv/bin/activate  # On Linux/macOS
-    # .venv\Scripts\activate    # On Windows
-
-    # Install required packages
-    uv pip install playwright pandas sqlalchemy pyarrow
+    uv sync
     ```
 
-3.  **Install Playwright browser binaries:**
-    Playwright needs browser binaries to operate. After installing the `playwright` package, run:
+3.  **Set up .env file (optional):**
+    If you want to import the highlights and notes into Zotero, you will need to set up a `.env` file with your Zotero API key and collection ID.
     ```bash
-    uv run playwright install
+    cp .env.example .env
     ```
-    This will download the necessary browser (Chromium by default).
+    Populatethe `.env` file with your Zotero API key and collection ID.
 
 ## Usage
 
@@ -96,8 +86,6 @@ The script uses the Playwright library to control a web browser.
     *   Table name: `highlights_notes`
     *   Columns: `id`, `book_title`, `book_asin`, `item_type` ('highlight' or 'note'), `content`, `original_id` (UNIQUE), `location`, `date_created`, `retrieved_at`.
     *   The `original_id` is used to prevent duplicate entries on subsequent runs.
-*   **Parquet File (`kindle_highlights.parquet`):**
-    *   Contains the same data as the SQLite table, useful for big data processing or loading into other analytical tools.
 
 ## Troubleshooting
 
@@ -110,10 +98,6 @@ The script uses the Playwright library to control a web browser.
 *   **Timeout errors:**
     *   If you have a slow internet connection or many books/highlights, you might encounter timeouts. You can try increasing the timeout values in `scraper.py` (e.g., `timeout=90000` in `page.goto`, or timeouts in `wait_for_selector`).
 
-## Contributing
-
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change. Please make sure to update tests as appropriate (if any are added).
-
 ## License
 
-[MIT](https://choosealicense.com/licenses/mit/) (You can choose any license you prefer)
+[MIT](https://choosealicense.com/licenses/mit/)

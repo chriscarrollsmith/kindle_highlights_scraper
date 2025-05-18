@@ -9,3 +9,4 @@ kindle_highlights.parquet
 .cursorindexingignore
 auth_state.json
 artifacts/
+.env

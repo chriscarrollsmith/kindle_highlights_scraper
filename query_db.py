@@ -27,20 +27,20 @@ def run_queries():
         print("\n3. Last 5 highlights added (content might be truncated for display):")
         # Using pandas for nicer table display for this one
         try:
-            df_highlights = pd.read_sql_query(f"SELECT book_title, item_type, content, original_id, retrieved_at FROM {TABLE_NAME} WHERE item_type = 'highlight' ORDER BY retrieved_at DESC LIMIT 5", conn)
+            df_highlights = pd.read_sql_query(f"SELECT book_title, book_author, item_type, content, original_id, retrieved_at FROM {TABLE_NAME} WHERE item_type = 'highlight' ORDER BY retrieved_at DESC LIMIT 5", conn)
             if not df_highlights.empty:
                 for index, row in df_highlights.iterrows():
-                    print(f"    Book: {row['book_title']}\n    Content: {row['content'][:100] + '...' if len(row['content']) > 100 else row['content']}\n    Retrieved: {row['retrieved_at']}\n    ---------------------") 
+                    print(f"    Book: {row['book_title']} by {row['book_author']}\n    Content: {row['content'][:100] + '...' if len(row['content']) > 100 else row['content']}\n    Retrieved: {row['retrieved_at']}\n    ---------------------")
             else:
                 print("   No highlights found.")
         except Exception as e:
             print(f"   Error fetching highlights with pandas: {e}")
             print("   Falling back to simple cursor fetch for highlights:")
-            cursor.execute(f"SELECT book_title, content, retrieved_at FROM {TABLE_NAME} WHERE item_type = 'highlight' ORDER BY retrieved_at DESC LIMIT 5")
+            cursor.execute(f"SELECT book_title, book_author, content, retrieved_at FROM {TABLE_NAME} WHERE item_type = 'highlight' ORDER BY retrieved_at DESC LIMIT 5")
             highlights_fallback = cursor.fetchall()
             if highlights_fallback:
                 for row_fb in highlights_fallback:
-                    print(f"    Book: {row_fb[0]}\n    Content: {row_fb[1][:100] + '...' if len(row_fb[1]) > 100 else row_fb[1]}\n    Retrieved: {row_fb[2]}\n    ---------------------")
+                    print(f"    Book: {row_fb[0]} by {row_fb[1]}\n    Content: {row_fb[2][:100] + '...' if len(row_fb[2]) > 100 else row_fb[2]}\n    Retrieved: {row_fb[3]}\n    ---------------------")
             else:
                 print("   No highlights found (fallback).")
 
@@ -48,20 +48,20 @@ def run_queries():
         # 4. Show 5 most recent notes
         print("\n4. Last 5 notes added (content might be truncated for display):")
         try:
-            df_notes = pd.read_sql_query(f"SELECT book_title, item_type, content, original_id, retrieved_at FROM {TABLE_NAME} WHERE item_type = 'note' ORDER BY retrieved_at DESC LIMIT 5", conn)
+            df_notes = pd.read_sql_query(f"SELECT book_title, book_author, item_type, content, original_id, retrieved_at FROM {TABLE_NAME} WHERE item_type = 'note' ORDER BY retrieved_at DESC LIMIT 5", conn)
             if not df_notes.empty:
                 for index, row in df_notes.iterrows():
-                    print(f"    Book: {row['book_title']}\n    Content: {row['content'][:100] + '...' if len(row['content']) > 100 else row['content']}\n    Retrieved: {row['retrieved_at']}\n    ---------------------") 
+                    print(f"    Book: {row['book_title']} by {row['book_author']}\n    Content: {row['content'][:100] + '...' if len(row['content']) > 100 else row['content']}\n    Retrieved: {row['retrieved_at']}\n    ---------------------")
             else:
                 print("   No notes found.")
         except Exception as e:
             print(f"   Error fetching notes with pandas: {e}")
             print("   Falling back to simple cursor fetch for notes:")
-            cursor.execute(f"SELECT book_title, content, retrieved_at FROM {TABLE_NAME} WHERE item_type = 'note' ORDER BY retrieved_at DESC LIMIT 5")
+            cursor.execute(f"SELECT book_title, book_author, content, retrieved_at FROM {TABLE_NAME} WHERE item_type = 'note' ORDER BY retrieved_at DESC LIMIT 5")
             notes_fallback = cursor.fetchall()
             if notes_fallback:
                 for row_fb in notes_fallback:
-                    print(f"    Book: {row_fb[0]}\n    Content: {row_fb[1][:100] + '...' if len(row_fb[1]) > 100 else row_fb[1]}\n    Retrieved: {row_fb[2]}\n    ---------------------")
+                    print(f"    Book: {row_fb[0]} by {row_fb[1]}\n    Content: {row_fb[2][:100] + '...' if len(row_fb[2]) > 100 else row_fb[2]}\n    Retrieved: {row_fb[3]}\n    ---------------------")
             else:
                 print("   No notes found (fallback).")
 
@@ -76,6 +76,21 @@ def run_queries():
         cursor.execute(f"SELECT COUNT(*) FROM (SELECT original_id FROM {TABLE_NAME} GROUP BY original_id HAVING COUNT(*) > 1)")
         duplicate_original_id_groups = cursor.fetchone()[0]
         print(f"\n6. Number of original_id groups with duplicates: {duplicate_original_id_groups}")
+
+        # 7. List unique authors and their book counts
+        print("\n7. Authors and their book counts (based on entries in highlights_notes):")
+        try:
+            # This query counts distinct book titles per author.
+            # It assumes that each entry for a book_title will have the same book_author.
+            cursor.execute(f"SELECT book_author, COUNT(DISTINCT book_title) as num_books FROM {TABLE_NAME} WHERE book_author IS NOT NULL AND book_author != 'Unknown Author' GROUP BY book_author ORDER BY num_books DESC, book_author ASC")
+            authors_books = cursor.fetchall()
+            if authors_books:
+                for row_ab in authors_books:
+                    print(f"   - {row_ab[0]}: {row_ab[1]} book(s)")
+            else:
+                print("   No author information found or all authors are 'Unknown Author'.")
+        except Exception as e:
+            print(f"   Error fetching author book counts: {e}")
 
 
     except sqlite3.Error as e:

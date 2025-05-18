@@ -8,7 +8,7 @@ import os # For checking file existence
 import json # For parsing auth_state.json
 
 # Constants
-TEST_MODE = True  # Set to True to only process the first book, False to process all books
+TEST_MODE = False  # Set to True to only process the first book, False to process all books
 KINDLE_NOTEBOOK_URL = "https://read.amazon.com/notebook"
 # Placeholder selectors - REPLACE THESE WITH YOUR FINDINGS from rendered_html.md or manual inspection
 BOOK_LIST_SELECTOR = "div.kp-notebook-library-each-book" # Example, adjust
