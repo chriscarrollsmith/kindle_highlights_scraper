@@ -6,6 +6,7 @@ import re # For extracting ASINs if needed
 import random # Added for random delay
 import os # For checking file existence
 import json # For parsing auth_state.json
+import metadata_enrichment
 
 # Constants
 TEST_MODE = False  # Set to True to only process the first book, False to process all books
@@ -107,6 +108,7 @@ def setup_database():
         original_id TEXT UNIQUE, -- To prevent duplicates
         location TEXT, -- Optional, if you can find it
         date_created TEXT, -- Optional, if you can find it
+        book_metadata TEXT, -- New: JSON metadata from enrichment
         retrieved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -219,6 +221,9 @@ async def scrape_kindle_highlights():
                 
                 print(f"\nProcessing book ({i+1}/{len(book_elements)}): {book_title} (Author: {book_author}) (ASIN/ID: {book_asin})")
 
+                # Enrich metadata using ASIN -> ISBN -> Google Books
+                book_metadata = metadata_enrichment.enrich_book_metadata(book_title, book_author, book_asin)
+                
                 await book_element.click()
                 
                 try:
@@ -292,7 +297,8 @@ async def scrape_kindle_highlights():
                             "book_asin": book_asin,
                             "item_type": "highlight",
                             "content": final_content,
-                            "original_id": original_id
+                            "original_id": original_id,
+                            "book_metadata": json.dumps(book_metadata) if book_metadata else None
                         })
                         highlight_count += 1
                 
@@ -323,7 +329,8 @@ async def scrape_kindle_highlights():
                             "book_asin": book_asin,
                             "item_type": "note",
                             "content": text_content,
-                            "original_id": original_id
+                            "original_id": original_id,
+                            "book_metadata": json.dumps(book_metadata) if book_metadata else None
                         })
                         orphan_note_count += 1
                 
@@ -392,4 +399,4 @@ if __name__ == "__main__":
             print(f"{auth_file} not found. Starting initial login process.")
         
         asyncio.run(initial_login_and_save_state())
-        print(f"Login state presumably saved to {auth_file}. Please re-run the script to start scraping.") 
+        print(f"Login state presumably saved to {auth_file}. Please re-run the script to start scraping.")
